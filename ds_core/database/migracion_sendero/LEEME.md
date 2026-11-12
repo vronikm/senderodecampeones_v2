@@ -42,6 +42,7 @@ Por eso `aplicar_migracion.sh` de Champions se niega (la base ya tiene
 | `069`–`083` | las de Champions (genéricas, repetibles) |
 | `082` | `082_ver_asistencias_sendero.sql`: menú «Ver asistencias» (`asistenciaList`) bajo «Asistencia alumnos», con permiso de ver y exportar para el Administrador. Los `08x_*_sendero.sql` siguientes entran solos en la cadena |
 | `084` | `084_secuencial_por_ambiente_sendero.sql`: pruebas y producción numeran por separado: columna `ambiente` en `facturas_electronicas_secuenciales` y el ambiente en la clave única del número (Fútbol y League). El siguiente secuencial de cada ambiente se define en Core › Puntos de emisión. Repetible |
+| `085` | `085_posicion_juego_alumno_sendero.sql`: posición de juego preferida del alumno (catálogo `posicion_juego`). Los alumnos sin posición quedan en «No definido» (`3ND`), que pasa a ser el valor por defecto de `alumno_posicionid`. Repetible |
 
 Sendero tiene el rol 6 «Asistente» (como barcelona). No choca con la `029`,
 que crea «Árbitro» y «Oficial de mesa» por nombre, con id automático.
@@ -53,7 +54,7 @@ MYSQL=/ruta/a/mysql MYSQL_OPTS="-u USUARIO -pCLAVE" \
   ds_core/database/migracion_sendero/aplicar_migracion.sh BASE
 ```
 
-81 archivos, se detiene en el primer error. Antes de empezar exige que `BASE`
+86 archivos, se detiene en el primer error. Antes de empezar exige que `BASE`
 sea Sendero v1 **sin migrar** (tiene `facturas_electronicas` y no tiene
 `cumple_plantilla`). Para phpMyAdmin: `--generar ARCHIVO.sql`.
 
@@ -67,6 +68,38 @@ sea Sendero v1 **sin migrar** (tiene `facturas_electronicas` y no tiene
    SET FOREIGN_KEY_CHECKS=0;` al principio y `SET FOREIGN_KEY_CHECKS=1;` al final.
 3. `aplicar_migracion.sh BASE`.
 4. Comprobar (abajo).
+5. Llevarla al hosting (siguiente apartado).
+
+## Llevarla a producción
+
+En el hosting no hay `SUPER`: un volcado con `DEFINER=root@localhost` falla
+al crear las vistas (`#1227 - Acceso negado… SUPER or SET_USER_ID`). El
+*Exportar* de phpMyAdmin siempre lo escribe, así que el volcado se hace así:
+
+```bash
+mysqldump -u root --default-character-set=utf8mb4 --single-transaction \
+  --skip-triggers --no-tablespaces --set-gtid-purged=OFF BASE \
+  | sed -E 's/DEFINER=`[^`]+`@`[^`]+`//g; s/SQL SECURITY DEFINER/SQL SECURITY INVOKER/g' \
+  > sendero_produccion.sql
+```
+
+Comprobado el 2026-11-09: se restaura sin errores con un usuario que solo
+tiene permisos sobre su base (108 tablas y vistas, las tres vistas responden).
+
+1. **Congelar Sendero v1** desde el momento de la copia: lo que se registre
+   después no estará en la base nueva.
+2. Migrar la copia **limpia** (pasos 1 a 4). No hacer pruebas sobre la base
+   que va a subir: una factura de ensayo, un correo cambiado o el ambiente
+   SRI en pruebas viajan a producción. Si hubo pruebas, repetir desde la copia.
+3. Volcar sin `DEFINER` (arriba) e importar en la base del hosting **vacía**.
+4. Copiar los archivos de «Archivos fuera de la base» y `ds_core/config/secrets.php`.
+5. En el sistema ya publicado, comprobar en Core › Facturación electrónica
+   que el ambiente sea **Producción** y en Core › Puntos de emisión que el
+   próximo número de producción siga al último autorizado en el SRI.
+
+Alternativa sin volcado: `aplicar_migracion.sh --generar ARCHIVO.sql` e
+importarlo en phpMyAdmin sobre la copia de v1 restaurada en el hosting. Las
+vistas las crea el usuario que importa, así que no hay `DEFINER` que quitar.
 
 ## Archivos fuera de la base
 
