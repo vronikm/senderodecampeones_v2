@@ -44,6 +44,11 @@ done
 for f in "$AQUI"/08[2-9]_*_sendero.sql "$AQUI"/09[0-9]_*_sendero.sql; do
     [ -f "$f" ] && ARCHIVOS+=("$f")
 done
+# Comunes del núcleo desde la 086 (numeradas tras las de champions y las
+# propias). Faltaban aquí: la 086 no entraba en esta cadena.
+for f in "$RAIZ"/08[6-9]_*.sql "$RAIZ"/09[0-9]_*.sql; do
+    [ -f "$f" ] && ARCHIVOS+=("$f")
+done
 
 # --- Un solo archivo para phpMyAdmin ----------------------------------
 if [ "${1:-}" = "--generar" ]; then
