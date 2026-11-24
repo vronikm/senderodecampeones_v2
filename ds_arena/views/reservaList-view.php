@@ -373,6 +373,12 @@ require_once __DIR__ . "/inc/layout-top.php";
                                     echo $motivoX !== '' ? htmlspecialchars($motivoX, ENT_QUOTES, 'UTF-8') : 'Sin motivo registrado'; ?>
                                 </span>
                             <?php endif; ?>
+                            <?php if ((float)($r['devuelto'] ?? 0) > 0): ?>
+                                <a class="ar-devuelto" href="<?php echo APP_URL; ?>reservaDetalle/?id=<?php echo (int)$r['reserva_id']; ?>#devoluciones"
+                                   title="Ver las devoluciones de esta reserva">
+                                    <i class="fas fa-rotate-left me-1" aria-hidden="true"></i>Devuelto $<?php echo number_format((float)$r['devuelto'], 2); ?>
+                                </a>
+                            <?php endif; ?>
                         </td>
                         <td class="ds-tabla-acciones ar-tabla__acciones">
                             <?php if ($cancelada): ?>
@@ -441,17 +447,10 @@ require_once __DIR__ . "/inc/layout-top.php";
                                     </button>
                                 <?php endif; ?>
 
-                                <?php if ($abonado > 0): ?>
-                                    <?php /* El servidor no deja cancelar con abonos: no se ofrece un botón que va a fallar. */ ?>
-                                    <span class="d-inline-block" tabindex="0"
-                                          title="Tiene $<?php echo number_format($abonado, 2); ?> abonados: devuélvalos o páselos al monedero antes de cancelar">
-                                        <button type="button" class="btn btn-sm btn-outline-danger" disabled aria-label="Cancelar (no disponible)">
-                                            <i class="fas fa-times"></i>
-                                        </button>
-                                    </span>
-                                <?php else: ?>
-                                    <?php /* Abre el modal que pide el motivo (obligatorio). */ ?>
+                                <?php /* Abre el modal que pide el motivo (obligatorio) y, si
+                                         tiene abonos, cómo se devuelven (migración 092). */ ?>
                                     <button type="button" class="btn btn-sm btn-outline-danger js-cancelar-reserva"
+                                            data-abonado="<?php echo number_format($abonado, 2, '.', ''); ?>"
                                             data-id="<?php echo (int)$r['reserva_id']; ?>"
                                             data-codigo="<?php echo htmlspecialchars($r['reserva_codigo'], ENT_QUOTES, 'UTF-8'); ?>"
                                             data-detalle="<?php echo htmlspecialchars($r['cliente_nombre'] . ' · ' . $r['instalacion_nombre'] . ' · ' .
@@ -461,7 +460,6 @@ require_once __DIR__ . "/inc/layout-top.php";
                                             title="Cancelar" aria-label="Cancelar la reserva <?php echo htmlspecialchars($r['reserva_codigo'], ENT_QUOTES, 'UTF-8'); ?>">
                                         <i class="fas fa-times"></i><span class="ar-solo-movil ms-1">Cancelar</span>
                                     </button>
-                                <?php endif; ?>
                             <?php elseif ($puedeEditar && $cancelada): ?>
                                 <button type="button" class="btn btn-sm btn-outline-success js-estado"
                                         data-id="<?php echo (int)$r['reserva_id']; ?>"
@@ -647,6 +645,31 @@ $motivosReserva = ['Lo pidió el cliente', 'Lluvia o mal clima', 'El cliente no 
                         <span class="ar-motivo__cuenta" aria-live="polite">0/250</span>
                     </div>
 
+                    <?php /* Con abonos: se devuelve todo al cancelar, por el medio
+                             elegido. Sin abonos la sección no se ve y sus campos
+                             van desactivados (no se envían ni se exigen). */ ?>
+                    <fieldset class="ar-devolver mt-3" id="cancelarDevolucion" hidden disabled>
+                        <legend class="form-label fs-6 mb-1">
+                            <i class="fas fa-rotate-left me-1 text-warning" aria-hidden="true"></i>
+                            Devolver <strong id="cancelarDevolucionValor">$0.00</strong> abonados <span class="text-danger">*</span>
+                        </legend>
+                        <p class="small text-body-secondary mb-2">¿Cómo se le devuelve al cliente?</p>
+                        <div class="ar-devolver__medios" role="radiogroup" aria-label="Medio de devolución">
+                            <input type="radio" class="btn-check disable-adminlte-validations" name="devolucion_medio" id="devMedioEFE" value="EFE" required>
+                            <label class="btn btn-outline-secondary" for="devMedioEFE"><i class="fas fa-money-bill-wave me-1" aria-hidden="true"></i>Efectivo</label>
+                            <input type="radio" class="btn-check disable-adminlte-validations" name="devolucion_medio" id="devMedioTRA" value="TRA">
+                            <label class="btn btn-outline-secondary" for="devMedioTRA"><i class="fas fa-building-columns me-1" aria-hidden="true"></i>Transferencia</label>
+                            <input type="radio" class="btn-check disable-adminlte-validations" name="devolucion_medio" id="devMedioMON" value="MON">
+                            <label class="btn btn-outline-secondary" for="devMedioMON"><i class="fas fa-wallet me-1" aria-hidden="true"></i>Monedero</label>
+                        </div>
+                        <div class="ar-devolver__error" role="alert" hidden>Elija cómo se le devuelve al cliente.</div>
+                        <div class="mt-2" id="cancelarDevolucionRef" hidden>
+                            <label for="devReferencia" class="form-label small mb-1">Número o comprobante de la transferencia <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="devReferencia" name="devolucion_referencia" maxlength="60" disabled>
+                        </div>
+                        <p class="small text-body-secondary mb-0 mt-2" id="cancelarDevolucionNota"></p>
+                    </fieldset>
+
                     <p class="ar-cancelar__aviso mb-0 mt-3">
                         <i class="fas fa-circle-info me-1" aria-hidden="true"></i>El horario quedará libre.
                         <span class="ar-cancelar__fija d-none">Sólo se cancela esta semana; la reserva fija sigue.</span>
@@ -656,7 +679,7 @@ $motivosReserva = ['Lo pidió el cliente', 'Lluvia o mal clima', 'El cliente no 
 
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Volver</button>
-                    <button type="submit" class="btn btn-danger"><i class="fas fa-ban me-1" aria-hidden="true"></i>Cancelar reserva</button>
+                    <button type="submit" class="btn btn-danger"><i class="fas fa-ban me-1" aria-hidden="true"></i><span id="cancelarReservaBoton">Cancelar reserva</span></button>
                 </div>
             </form>
         </div>
@@ -673,8 +696,49 @@ document.addEventListener('click', function (e) {
     document.getElementById('cancelarReservaDetalle').textContent = b.dataset.detalle;
     modal.querySelector('.ar-cancelar__fija').classList.toggle('d-none', !b.dataset.fija);
     arLimpiarMotivo(modal);
+
+    /* Con abonos, la devolución: se muestra, se exige y el botón lo dice. */
+    var abonado = parseFloat(b.dataset.abonado || '0') || 0;
+    var dev = document.getElementById('cancelarDevolucion');
+    var txt = '$' + abonado.toFixed(2);
+    dev.hidden = dev.disabled = !(abonado > 0);
+    dev.querySelectorAll('input[name="devolucion_medio"]').forEach(function (r) { r.checked = false; });
+    document.getElementById('devReferencia').value = '';
+    dev.querySelector('.ar-devolver__error').hidden = true;
+    document.getElementById('cancelarDevolucionValor').textContent = txt;
+    document.getElementById('cancelarReservaBoton').textContent = abonado > 0 ? 'Cancelar y devolver ' + txt : 'Cancelar reserva';
+    arMedioDevolucion();
+
     bootstrap.Modal.getOrCreateInstance(modal).show();
 });
+
+/* Transferencia pide su comprobante; cada medio dice qué pasará. */
+function arMedioDevolucion() {
+    var elegido = document.querySelector('#cancelarDevolucion input[name="devolucion_medio"]:checked');
+    var medio = elegido ? elegido.value : '';
+    var caja = document.getElementById('cancelarDevolucionRef'), ref = document.getElementById('devReferencia');
+    caja.hidden = medio !== 'TRA';
+    ref.disabled = medio !== 'TRA';
+    ref.required = medio === 'TRA';
+    document.getElementById('cancelarDevolucionNota').textContent = {
+        EFE: 'Se entrega en efectivo: el cuadre de caja de hoy lo resta.',
+        TRA: 'Se devuelve por transferencia a la cuenta del cliente.',
+        MON: 'Queda como saldo a favor del cliente para su próxima reserva.'
+    }[medio] || '';
+}
+document.addEventListener('change', function (e) {
+    if (e.target.name === 'devolucion_medio') {
+        document.querySelector('#cancelarDevolucion .ar-devolver__error').hidden = true;
+        arMedioDevolucion();
+    }
+});
+/* Sin medio: un solo aviso para el grupo, no uno por opción (las opciones
+   llevan disable-adminlte-validations para que AdminLTE no los ponga). */
+document.addEventListener('invalid', function (e) {
+    if (e.target.name === 'devolucion_medio') {
+        document.querySelector('#cancelarDevolucion .ar-devolver__error').hidden = false;
+    }
+}, true);
 </script>
 <?php endif; ?>
 
@@ -859,6 +923,23 @@ document.addEventListener('click', function (e) {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .ar-motivo-x--sin { font-style: italic; opacity: .8; }
+/* Lo que se devolvió al cancelar (migración 092). */
+.ar-devuelto {
+    display: inline-block; margin-top: .3rem; font-size: .8rem; text-decoration: none;
+    color: var(--bs-warning-text-emphasis); white-space: nowrap;
+}
+.ar-devuelto:hover { text-decoration: underline; }
+
+/* ---- Devolución, dentro del modal de cancelación ---- */
+.ar-devolver {
+    border: 1px solid var(--bs-warning-border-subtle) !important; border-radius: .5rem;
+    padding: .75rem !important; background: var(--bs-warning-bg-subtle);
+}
+.ar-devolver legend { float: none; width: auto; margin-bottom: .25rem; }
+.ar-devolver__medios { display: flex; flex-wrap: wrap; gap: .5rem; }
+.ar-devolver__medios .btn { --bs-btn-padding-y: .35rem; --bs-btn-font-size: .9rem; background: var(--bs-body-bg); }
+.ar-devolver__medios .btn-check:checked + .btn { background: var(--ds-acento, #0e7490); border-color: var(--ds-acento, #0e7490); color: #fff; }
+.ar-devolver__error { margin-top: .4rem; font-size: .85rem; color: var(--bs-danger-text-emphasis); }
 .ar-tabla__cancelada > td:not(.ar-tabla__acciones):not(.ar-tabla__estado) { color: var(--bs-secondary-color); }
 .ar-solo-movil { display: none; }
 
@@ -873,6 +954,11 @@ document.addEventListener('click', function (e) {
 /* Atajos de motivo: botones-ficha que se envuelven. El elegido, relleno. */
 .ar-motivos { display: flex; flex-wrap: wrap; gap: .4rem; }
 .ar-motivos__op { --bs-btn-padding-y: .3rem; --bs-btn-padding-x: .7rem; --bs-btn-font-size: .875rem; border-radius: 2rem; }
+/* Sin elegir, con el color del texto y no el gris de btn-outline-secondary: en oscuro parecían desactivados. */
+.ar-motivos__op, .ar-devolver__medios .btn {
+    --bs-btn-color: var(--bs-body-color); --bs-btn-border-color: var(--bs-border-color);
+    --bs-btn-hover-color: var(--bs-body-color); --bs-btn-hover-bg: var(--bs-tertiary-bg); --bs-btn-hover-border-color: var(--bs-secondary-color);
+}
 .ar-motivos .ar-motivos__op[aria-pressed="true"] {
     --bs-btn-color: #fff; --bs-btn-bg: var(--bs-danger); --bs-btn-border-color: var(--bs-danger);
     --bs-btn-hover-color: #fff; --bs-btn-hover-bg: var(--bs-danger); --bs-btn-hover-border-color: var(--bs-danger);
@@ -880,6 +966,22 @@ document.addEventListener('click', function (e) {
 }
 .ar-motivo__texto { resize: vertical; }
 .ar-cancelar fieldset { border: 0; padding: 0; margin-left: 0; margin-right: 0; min-width: 0; }
+/*
+| EL PIE SIEMPRE A LA VISTA
+| El <form> va entre .modal-content y .modal-body, y eso rompe
+| modal-dialog-scrollable: el cuerpo no se encogía y, con la devolución
+| (2026-11-23), los botones quedaban fuera de la pantalla. El formulario
+| pasa a ser la columna flexible: cabecera y pie fijos, el cuerpo se
+| desplaza.
+*/
+.ar-hoja .modal-content > form.ar-cancelar {
+    display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; max-height: 100%;
+}
+.ar-hoja .modal-content > form.ar-cancelar > .modal-header,
+.ar-hoja .modal-content > form.ar-cancelar > .modal-footer { flex-shrink: 0; }
+.ar-hoja .modal-content > form.ar-cancelar > .modal-body { overflow-y: auto; overscroll-behavior: contain; min-height: 0; }
+/* Cuando el cuerpo se desplaza, una sombra sobre el pie dice que hay más arriba. */
+.ar-hoja .modal-footer { box-shadow: 0 -6px 12px -10px rgba(0, 0, 0, .35); position: relative; z-index: 1; }
 .ar-cancelar legend { float: none; width: auto; padding: 0; font-weight: 600; }
 
 /* ---- Teléfono y tableta: fichas en lugar de tabla (< 992 px) ---- */
@@ -963,13 +1065,34 @@ document.addEventListener('click', function (e) {
     .ar-hoja .modal-dialog { margin: 0; min-height: 100%; align-items: flex-end; max-width: none; }
     .ar-hoja.fade .modal-dialog { transform: translateY(100%); }
     .ar-hoja.show .modal-dialog { transform: none; }
-    .ar-hoja .modal-content { border-radius: 1rem 1rem 0 0; border: 0; max-height: 92vh; }
+    /* dvh: la altura que de verdad queda con la barra del navegador. */
+    .ar-hoja .modal-content { border-radius: 1rem 1rem 0 0; border: 0; max-height: 92vh; max-height: 92dvh; }
     .ar-hoja .modal-dialog-scrollable { height: auto; max-height: none; }
-    .ar-hoja .modal-footer { flex-wrap: nowrap; gap: .5rem; padding-bottom: max(.75rem, env(safe-area-inset-bottom)); }
-    .ar-hoja .modal-footer > .btn { flex: 1 1 0; min-height: 2.9rem; margin: 0; }
-    .ar-hoja .modal-footer > .btn-danger { flex-grow: 1.6; }
-    .ar-motivos__op { --bs-btn-padding-y: .5rem; --bs-btn-font-size: .9rem; }
+    /* El asa de la hoja: se reconoce que es un panel que se cierra. */
+    .ar-hoja .modal-header { position: relative; padding: 1rem 1rem .6rem; }
+    .ar-hoja .modal-header::before {
+        content: ""; position: absolute; top: .4rem; left: 50%; width: 2.5rem; height: .25rem;
+        margin-left: -1.25rem; border-radius: 1rem; background: var(--bs-border-color);
+    }
+    .ar-hoja .modal-title { font-size: 1.1rem; }
+    .ar-hoja .modal-body { padding: .75rem 1rem; }
+    .ar-hoja .ar-cancelar__resumen { margin-bottom: .75rem; padding: .5rem .65rem; font-size: .85rem; }
+    .ar-hoja .modal-footer { flex-wrap: nowrap; gap: .5rem; padding: .6rem 1rem max(.75rem, env(safe-area-inset-bottom)); }
+    .ar-hoja .modal-footer > .btn { flex: 1 1 0; min-height: 3rem; margin: 0; }
+    .ar-hoja .modal-footer > .btn-danger { flex-grow: 2.2; font-weight: 600; }
+    /* Motivos: dos columnas parejas en lugar de tres filas desiguales. */
+    .ar-motivos { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem; }
+    .ar-motivos__op { --bs-btn-padding-y: .55rem; --bs-btn-padding-x: .5rem; --bs-btn-font-size: .85rem; border-radius: .6rem; line-height: 1.2; }
     .ar-motivo__texto { font-size: 1rem; }
+    /* Medios de devolución: tres botones iguales, icono arriba y texto abajo. */
+    .ar-devolver { padding: .65rem !important; }
+    .ar-devolver__medios { display: grid; grid-template-columns: repeat(3, 1fr); gap: .4rem; }
+    .ar-devolver__medios .btn {
+        display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .2rem;
+        min-height: 3.6rem; --bs-btn-font-size: .85rem; --bs-btn-padding-x: .25rem;
+    }
+    .ar-devolver__medios .btn i { margin: 0 !important; font-size: 1.15rem; }
+    .ar-devolver input[type="text"] { font-size: 1rem; min-height: 2.75rem; }   /* 16 px: iOS no hace zoom al escribir */
 }
 </style>
 

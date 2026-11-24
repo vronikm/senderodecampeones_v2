@@ -228,9 +228,33 @@ require_once __DIR__ . "/inc/layout-top.php";
                             <i class="fas fa-coins fa-lg mt-1"></i>
                             <div>
                                 Esta reserva ya tiene <strong>$<?php echo number_format((float)$reserva['reserva_abonado'], 2); ?></strong> abonados.
-                                El nuevo importe no puede quedar por debajo de esa cifra.
+                                Si pasa a un horario de menor valor, se registra la devolución de la diferencia.
                             </div>
                         </div>
+
+                        <?php /* La devolución de la diferencia (migración 092): se ve
+                                 y se exige sólo si el importe nuevo queda por debajo
+                                 de lo abonado; si no, va desactivada y no se envía. */ ?>
+                        <fieldset class="ar-devolver mt-3" id="devolucionEdicion" hidden disabled>
+                            <legend class="form-label fs-6 mb-1">
+                                <i class="fas fa-rotate-left me-1 text-warning" aria-hidden="true"></i>
+                                Devolver <strong id="devolucionValor">$0.00</strong> de diferencia <span class="text-danger">*</span>
+                            </legend>
+                            <p class="small text-body-secondary mb-2" id="devolucionCuenta"></p>
+                            <div class="ar-devolver__medios" role="radiogroup" aria-label="Medio de devolución">
+                                <input type="radio" class="btn-check disable-adminlte-validations" name="devolucion_medio" id="devMedioEFE" value="EFE" required>
+                                <label class="btn btn-outline-secondary" for="devMedioEFE"><i class="fas fa-money-bill-wave me-1" aria-hidden="true"></i>Efectivo</label>
+                                <input type="radio" class="btn-check disable-adminlte-validations" name="devolucion_medio" id="devMedioTRA" value="TRA">
+                                <label class="btn btn-outline-secondary" for="devMedioTRA"><i class="fas fa-building-columns me-1" aria-hidden="true"></i>Transferencia</label>
+                                <input type="radio" class="btn-check disable-adminlte-validations" name="devolucion_medio" id="devMedioMON" value="MON">
+                                <label class="btn btn-outline-secondary" for="devMedioMON"><i class="fas fa-wallet me-1" aria-hidden="true"></i>Monedero</label>
+                            </div>
+                            <div class="ar-devolver__error" role="alert" hidden>Elija cómo se le devuelve al cliente.</div>
+                            <div class="mt-2" id="devolucionRef" hidden>
+                                <label for="devReferencia" class="form-label small mb-1">Número o comprobante de la transferencia <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="devReferencia" name="devolucion_referencia" maxlength="60" disabled>
+                            </div>
+                        </fieldset>
                     <?php endif; ?>
                 </div>
             </div>
@@ -267,6 +291,9 @@ require_once __DIR__ . "/inc/layout-top.php";
     var URL_AJAX  = '<?php echo APP_URL; ?>ajax/arenaAjax.php';
     var HOY       = '<?php echo date('Y-m-d'); ?>';
     var RESERVA   = <?php echo (int)$id; ?>;
+    /* Lo abonado: si el importe nuevo queda por debajo, se devuelve la diferencia. */
+    var ABONADO   = <?php echo $esAlta ? 0 : round((float)$reserva['reserva_abonado'], 2); ?>;
+    var devolver  = 0;
     /* El horario que ya tenía la reserva, para marcarlo al editar. */
     var ORIGINAL  = { inst: inst.value, fecha: fecha.value, desde: desde.value, hasta: hasta.value };
     var MESES     = ['enero','febrero','marzo','abril','mayo','junio','julio',
@@ -399,7 +426,7 @@ require_once __DIR__ . "/inc/layout-top.php";
             return;
         }
 
-        mensaje(r.libres
+        mensaje(bloques.some(elegible)
             ? ''
             : '<i class="fas fa-calendar-times me-1"></i> No quedan horarios libres el ' +
               esc(fechaLarga(fecha.value).toLowerCase()) + '. Pruebe con otro día.');
@@ -417,11 +444,12 @@ require_once __DIR__ . "/inc/layout-top.php";
                 }
                 html += '<div class="ar-bloques">';
             }
-            var libre = b.estado === 'libre';
-            var nota  = { ocupado: 'Ocupado', bloqueado: 'Bloqueado', pasado: 'Ya pasó' }[b.estado] || ('$' + (+b.tarifa).toFixed(2));
+            var precio = '$' + (+b.tarifa).toFixed(2);
+            var nota   = { ocupado: 'Ocupado', bloqueado: 'Bloqueado', pasado: 'Pasó · ' + precio }[b.estado] || precio;
             html += '<button type="button" class="ar-bloque ar-bloque--' + b.estado + '" data-i="' + i + '"' +
-                    (libre ? '' : ' disabled') + ' aria-pressed="false"' +
-                    ' title="' + esc(b.desde + ' a ' + b.hasta + (b.detalle ? ' · ' + b.detalle : '')) + '">' +
+                    (elegible(b) ? '' : ' disabled') + ' aria-pressed="false"' +
+                    ' title="' + esc(b.desde + ' a ' + b.hasta + (b.detalle ? ' · ' + b.detalle : '') +
+                                     (b.estado === 'pasado' ? ' · se puede registrar igual' : '')) + '">' +
                     '<span class="ar-bloque__hora">' + esc(b.desde) + '</span>' +
                     '<span class="ar-bloque__nota">' + esc(nota) + '</span></button>';
         });
@@ -429,9 +457,15 @@ require_once __DIR__ . "/inc/layout-top.php";
     }
 
     /*----------  Elegir: un toque fija el inicio, otro extiende hasta la última hora  ----------*/
+    /* Una hora que ya pasó también se puede elegir: el alquiler se registra
+       después de jugado (llegó sin reservar, o se anota al cerrar el día).
+       Se pinta en otro color para que no se confunda con una hora por venir.
+       El servidor no pone reparos: sólo exige horario, sin bloqueo ni cruce. */
+    function elegible(b) { return b.estado === 'libre' || b.estado === 'pasado'; }
+
     function rangoLibre(i, j) {
         if (bloques[i].franja !== bloques[j].franja) { return false; }
-        for (var k = i; k <= j; k++) { if (bloques[k].estado !== 'libre') { return false; } }
+        for (var k = i; k <= j; k++) { if (!elegible(bloques[k])) { return false; } }
         return true;
     }
 
@@ -484,6 +518,7 @@ require_once __DIR__ . "/inc/layout-top.php";
 
     function actualizarResumen() {
         if (!desde.value || !hasta.value) {
+            pintarDevolucion(0, 0);
             resumen.hidden = true;
             caja.style.display = 'none'; pista.hidden = false;
             if (guardar) { guardar.disabled = true; guardar.title = 'Elija un horario disponible'; }
@@ -505,6 +540,11 @@ require_once __DIR__ . "/inc/layout-top.php";
         }
         var importe = partes.reduce(function (s, p) { return s + p.h * p.v; }, 0);
         var fuera  = !sel;
+        var yaPaso = false;
+        if (sel) { for (var q = sel.i; q <= sel.j; q++) { if (bloques[q].estado === 'pasado') { yaPaso = true; } } }
+        var notaPaso = yaPaso
+            ? '<br><small class="ar-resumen__paso"><i class="fas fa-clock-rotate-left me-1"></i>Este horario ya pasó: se registra igual, como alquiler ya jugado.</small>'
+            : '';
 
         var semanal = repetirSi && repetirSi.checked;
         var nombreDia = dias[diaIso(fecha.value)].toLowerCase();
@@ -515,12 +555,13 @@ require_once __DIR__ . "/inc/layout-top.php";
             ? '<i class="fas fa-repeat me-2"></i>' +
               '<strong>Cada ' + esc(nombreDia) + '</strong> · ' + esc(desde.value) + ' a ' + esc(hasta.value) + ' · ' +
               horas.toFixed(2).replace(/\.?0+$/, '') + (horas === 1 ? ' hora' : ' horas') +
-              '<br><small>Desde el ' + esc(fechaLarga(fecha.value).toLowerCase()) + ', hasta que se cancele.</small>'
+              '<br><small>Desde el ' + esc(fechaLarga(fecha.value).toLowerCase()) + ', hasta que se cancele.</small>' + notaPaso
             : '<i class="fas fa-calendar-check me-2"></i>' +
               '<strong>' + esc(fechaLarga(fecha.value)) + '</strong> · ' +
               esc(desde.value) + ' a ' + esc(hasta.value) + ' · ' +
               horas.toFixed(2).replace(/\.?0+$/, '') + (horas === 1 ? ' hora' : ' horas') +
-              (fuera ? '<br><small class="text-muted">Es el horario actual de la reserva. Toque un horario libre para cambiarlo.</small>' : '');
+              (fuera ? '<br><small class="text-muted">Es el horario actual de la reserva. Toque un horario libre para cambiarlo.</small>' : '') +
+              notaPaso;
 
         caja.style.display = ''; pista.hidden = true;
         total.textContent = '$' + importe.toFixed(2) + (semanal ? ' / semana' : '');
@@ -529,6 +570,51 @@ require_once __DIR__ . "/inc/layout-top.php";
         }).join(' + ') + (partes.length === 1 ? ' por hora' : '');
         if (textoGuardar && RESERVA === 0) { textoGuardar.textContent = semanal ? 'Reservar cada ' + nombreDia : 'Reservar'; }
         if (guardar) { guardar.disabled = false; guardar.title = ''; }
+        pintarDevolucion(importe, ABONADO);
+    }
+
+    /*----------  Devolver la diferencia al pasar a un horario más barato  ----------*/
+    var cajaDev = document.getElementById('devolucionEdicion');   /* sólo al editar con abonos */
+    function pintarDevolucion(importe, abonado) {
+        devolver = Math.round((abonado - importe) * 100) / 100;
+        if (!cajaDev) { devolver = 0; return; }
+        var hay = devolver > 0.004;
+        cajaDev.hidden = cajaDev.disabled = !hay;
+        if (textoGuardar && RESERVA > 0) { textoGuardar.textContent = hay ? 'Guardar y devolver $' + devolver.toFixed(2) : 'Guardar'; }
+        if (!hay) { devolver = 0; return; }
+        document.getElementById('devolucionValor').textContent = '$' + devolver.toFixed(2);
+        document.getElementById('devolucionCuenta').textContent =
+            'El cliente abonó $' + abonado.toFixed(2) + ' y la reserva pasa a valer $' + importe.toFixed(2) + '. ¿Cómo se le devuelve?';
+        medioDevolucion();
+    }
+    function medioDevolucion() {
+        if (!cajaDev) { return; }
+        var m = cajaDev.querySelector('input[name="devolucion_medio"]:checked');
+        var tra = !!m && m.value === 'TRA';
+        var ref = document.getElementById('devReferencia');
+        document.getElementById('devolucionRef').hidden = !tra;
+        ref.disabled = !tra || cajaDev.disabled;
+        ref.required = tra;
+    }
+    if (cajaDev) {
+        var errorDev = cajaDev.querySelector('.ar-devolver__error');
+        cajaDev.addEventListener('change', function () { errorDev.hidden = true; medioDevolucion(); });
+        /* Sin medio: un solo aviso para el grupo (las opciones llevan
+           disable-adminlte-validations para que AdminLTE no ponga uno por opción). */
+        cajaDev.addEventListener('invalid', function (e) {
+            if (e.target.name === 'devolucion_medio') { errorDev.hidden = false; }
+        }, true);
+        /* Antes de guardar, lo que se va a devolver y cómo, en la confirmación. */
+        form.addEventListener('submit', function () {
+            var m = cajaDev.querySelector('input[name="devolucion_medio"]:checked');
+            if (devolver > 0 && m) {
+                form.setAttribute('data-confirmar', 'Se devolverán $' + devolver.toFixed(2) + ' ' +
+                    ({ EFE: 'en efectivo', TRA: 'por transferencia', MON: 'al monedero del cliente' }[m.value]) +
+                    ' y la reserva quedará en $' + (ABONADO - devolver).toFixed(2) + ', pagada.');
+            } else {
+                form.removeAttribute('data-confirmar');
+            }
+        }, true);
     }
 
     function resumenInstalacion() {
@@ -769,7 +855,20 @@ require_once __DIR__ . "/inc/layout-top.php";
         cursor: not-allowed; border-color: var(--bs-danger-border-subtle);
         background: repeating-linear-gradient(135deg, var(--bs-danger-bg-subtle) 0 6px, transparent 6px 12px);
     }
-    .ar-bloque--pasado { opacity: .45; cursor: not-allowed; }
+    /* Ya pasó, pero se puede registrar: ámbar, para que se distinga de las
+       horas por venir (verde) sin parecer desactivada. */
+    .ar-bloque--pasado {
+        cursor: pointer; border-color: var(--bs-warning-border-subtle);
+        background: var(--bs-warning-bg-subtle); color: var(--bs-warning-text-emphasis);
+    }
+    .ar-bloque--pasado .ar-bloque__nota { color: var(--bs-warning-text-emphasis); opacity: .85; }
+    .ar-bloque--pasado:hover { border-color: var(--bs-warning); transform: translateY(-1px); }
+    /* Elegida, manda el color de «Elegido»; un borde ámbar recuerda que ya pasó. */
+    .ar-bloque--pasado.ar-bloque--sel, .ar-bloque--pasado.ar-bloque--sel:hover {
+        background: var(--ds-acento, #0e7490); color: #fff;
+        border-color: var(--bs-warning); box-shadow: inset 0 -3px 0 var(--bs-warning);
+    }
+    .ar-bloque--pasado.ar-bloque--sel .ar-bloque__nota { color: rgba(255, 255, 255, .85); opacity: 1; }
     .ar-bloque:focus-visible, .ar-dia:focus-visible { outline: 3px solid var(--ds-acento, #0e7490); outline-offset: 2px; }
 
     /* Leyenda, mensajes y resumen */
@@ -781,6 +880,19 @@ require_once __DIR__ . "/inc/layout-top.php";
         border-radius: var(--ds-radius-sm, 10px); color: var(--bs-secondary-color); font-size: .9rem;
     }
     .ar-vacio[hidden] { display: none; }
+    .ar-resumen__paso { color: var(--bs-warning-text-emphasis); }
+
+    /* Devolución de la diferencia al editar (migración 092). */
+    .ar-devolver {
+        border: 1px solid var(--bs-warning-border-subtle); border-radius: .5rem;
+        padding: .75rem; background: var(--bs-warning-bg-subtle);
+    }
+    .ar-devolver legend { float: none; width: auto; margin-bottom: .25rem; }
+    .ar-devolver__medios { display: flex; flex-wrap: wrap; gap: .5rem; }
+    .ar-devolver__medios .btn { --bs-btn-padding-y: .35rem; --bs-btn-font-size: .9rem; background: var(--bs-body-bg); }
+    .ar-devolver__medios .btn-check:checked + .btn { background: var(--ds-acento, #0e7490); border-color: var(--ds-acento, #0e7490); color: #fff; }
+    @media (max-width: 575.98px) { .ar-devolver__medios .btn { flex: 1 1 0; } }
+    .ar-devolver__error { margin-top: .4rem; font-size: .85rem; color: var(--bs-danger-text-emphasis); }
     .ar-resumen {
         margin-top: 10px; padding: 10px 14px; border-radius: var(--ds-radius-sm, 10px);
         background: var(--bs-success-bg-subtle); color: var(--bs-success-text-emphasis);
