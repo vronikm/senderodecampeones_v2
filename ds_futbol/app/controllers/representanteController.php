@@ -485,7 +485,7 @@
 					$celdaDeuda = '<span class="ds-repres__deuda ds-repres__deuda--aldia"><i class="fas fa-circle-check" aria-hidden="true"></i>Al día</span>';
 				}
 
-				$botones = '<a href="' . APP_URL . 'representanteProfile/' . $id . '/" class="btn btn-primary btn-sm ds-ficha__primario"><i class="fas fa-id-card me-1" aria-hidden="true"></i>Ver ficha</a>';
+				$botones = '<a href="' . APP_URL . 'representanteProfile/' . $id . '/" class="btn btn-primary btn-sm ds-ficha__primario" title="Ver ficha" aria-label="Ver la ficha de ' . $h($nombre) . '"><i class="fas fa-id-card me-1" aria-hidden="true"></i><span class="ds-ficha__texto">Ver ficha</span></a>';
 				if ($puedeCrear) {
 					$botones .= '<a href="' . APP_URL . 'alumnoNew/' . $id . '/" class="btn btn-success btn-sm" title="Nuevo alumno" aria-label="Registrar un alumno de ' . $h($nombre) . '"><i class="fas fa-user-plus" aria-hidden="true"></i></a>'
 					          . '<a href="' . APP_URL . 'representanteVinc/' . $id . '/" class="btn btn-secondary btn-sm" title="Vincular alumno" aria-label="Vincular un alumno a ' . $h($nombre) . '"><i class="fas fa-link" aria-hidden="true"></i></a>';

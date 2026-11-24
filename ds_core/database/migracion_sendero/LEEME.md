@@ -56,7 +56,10 @@ MYSQL=/ruta/a/mysql MYSQL_OPTS="-u USUARIO -pCLAVE" \
 
 86 archivos, se detiene en el primer error. Antes de empezar exige que `BASE`
 sea Sendero v1 **sin migrar** (tiene `facturas_electronicas` y no tiene
-`cumple_plantilla`). Para phpMyAdmin: `--generar ARCHIVO.sql`.
+`cumple_plantilla`). Para phpMyAdmin: `--generar ARCHIVO.sql`; ese archivo
+empieza con la misma comprobación en SQL y, si la base no sirve, se detiene
+con un error que lo dice (`DETENIDO_esta_base_ya_esta_migrada…`,
+`DETENIDO_no_es_copia_de_Sendero_v1…`) sin aplicar nada.
 
 ## Orden completo
 
@@ -74,7 +77,12 @@ sea Sendero v1 **sin migrar** (tiene `facturas_electronicas` y no tiene
 
 En el hosting no hay `SUPER`: un volcado con `DEFINER=root@localhost` falla
 al crear las vistas (`#1227 - Acceso negado… SUPER or SET_USER_ID`). El
-*Exportar* de phpMyAdmin siempre lo escribe, así que el volcado se hace así:
+*Exportar* de phpMyAdmin siempre lo escribe y, además (5.2.3, comprobado el
+2026-11-23), en las 17 tablas de Arena y League que tienen restricciones
+`CHECK` **omite el `CHECK` y el `ENGINE=InnoDB`**: se crean con el motor por
+defecto del servidor (MyISAM en WAMP) y la restauración falla en las claves
+foráneas (`#1824 Failed to open the referenced table 'dsl_partido'`). Quitar
+el `DEFINER` a ese archivo no basta. El volcado se hace así:
 
 ```bash
 mysqldump -u root --default-character-set=utf8mb4 --single-transaction \
@@ -83,8 +91,10 @@ mysqldump -u root --default-character-set=utf8mb4 --single-transaction \
   > sendero_produccion.sql
 ```
 
-Comprobado el 2026-11-09: se restaura sin errores con un usuario que solo
-tiene permisos sobre su base (108 tablas y vistas, las tres vistas responden).
+Comprobado el 2026-11-09 y el 2026-11-23: se restaura sin errores con un
+usuario que solo tiene permisos sobre su base, aun con MyISAM como motor por
+defecto (106 tablas InnoDB, 3 vistas que responden, 94 claves foráneas y 22
+`CHECK`, igual que el origen).
 
 1. **Congelar Sendero v1** desde el momento de la copia: lo que se registre
    después no estará en la base nueva.
