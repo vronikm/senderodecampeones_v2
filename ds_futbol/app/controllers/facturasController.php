@@ -2333,7 +2333,40 @@
 			if(!$factura){
 				throw new \RuntimeException('Factura electronica no encontrada.');
 			}
+			foreach(self::CARPETA_COMPROBANTE as $campo => $carpeta){
+				$factura[$campo] = $this->rutaComprobanteLocal($factura[$campo] ?? '', $carpeta);
+			}
 			return $factura;
+		}
+
+		/* Carpeta de ds_futbol/storage/sri/ de cada archivo de la factura. */
+		private const CARPETA_COMPROBANTE = [
+			'xml_generado'   => 'xml/generados',
+			'xml_firmado'    => 'xml/firmados',
+			'xml_autorizado' => 'xml/autorizados',
+			'ride_html'      => 'ride',
+		];
+
+		/*
+		| La base guarda la ruta ABSOLUTA del servidor donde se generó cada
+		| archivo. Las facturas traídas de v1 dicen
+		| /home/digitech/senderodecampeones/storage/sri/…, y cualquier cambio
+		| de carpeta o de servidor deja la ruta apuntando a ninguna parte
+		| aunque el archivo se haya copiado: «XML no encontrado».
+		|
+		| El nombre del archivo es la clave de acceso, única, así que se busca
+		| primero con ese nombre en la carpeta de ESTE sistema
+		| (ds_futbol/storage/sri/…) y, si no está, se deja la ruta guardada.
+		| Sólo se usa el nombre: nunca se sale de la carpeta.
+		*/
+		private function rutaComprobanteLocal($ruta, string $carpeta): string{
+			$ruta = (string)$ruta;
+			$nombre = basename(str_replace('\\', '/', $ruta));
+			if($nombre === '' || $nombre === '.' || $nombre === '..'){
+				return $ruta;
+			}
+			$local = dirname(__DIR__, 2) . '/storage/sri/' . $carpeta . '/' . $nombre;
+			return is_file($local) ? $local : $ruta;
 		}
 
 		private function obtenerDetallesRideFactura(\PDO $conexion, $facturaId){
@@ -3186,10 +3219,13 @@
 				elseif(!empty($factura['xml_firmado'])){ $archivo = $factura['xml_firmado']; $storageKey = 'xml_firmados'; }
 				else{ $archivo = $factura['xml_generado'] ?? ''; $storageKey = 'xml_generados'; }
 			}
+			$carpetas = ['xml_generados' => 'xml/generados', 'xml_firmados' => 'xml/firmados', 'xml_autorizados' => 'xml/autorizados', 'ride' => 'ride'];
+			$archivo = $this->rutaComprobanteLocal($archivo, $carpetas[$storageKey]);
 			if($archivo==='' || !is_file($archivo)){ return null; }
 			$raiz = realpath($config['storage'][$storageKey] ?? dirname($archivo));
 			$real = realpath($archivo);
-			if(!$real || !$raiz || strpos($real, $raiz) !== 0){ return null; }
+			/* Dentro de la carpeta, no sólo con el mismo prefijo («ride_x/»). */
+			if(!$real || !$raiz || strpos($real, $raiz . DIRECTORY_SEPARATOR) !== 0){ return null; }
 			return ['path'=>$real, 'filename'=>$factura['clave_acceso'].($tipo === 'ride' ? '.html' : '.xml'), 'content_type'=>$tipo === 'ride' ? 'text/html; charset=UTF-8' : 'application/xml; charset=UTF-8'];
 		}
 
