@@ -113,10 +113,26 @@ vistas las crea el usuario que importa, así que no hay `DEFINER` que quitar.
 
 ### Si ya se restauró con el Exportar de phpMyAdmin
 
-Es lo que pasó en producción (copia revisada el 2026-11-27): los datos
-llegaron completos, pero quedaron 17 tablas de Arena y League en MyISAM,
-11 de 95 claves foráneas y 0 de 22 `CHECK`. Sin claves foráneas la base
-acepta, por ejemplo, un pago de un alumno que no existe.
+Le pasó a la COPIA LOCAL de producción del 2026-11-27, no a producción: el
+archivo exportado traía las 94 claves foráneas y ninguna tabla en MyISAM,
+pero sin `ENGINE` ni `CHECK` en 17 tablas. Al importarlo en WAMP (motor
+por defecto MyISAM) esas tablas se crearon en MyISAM y la importación se
+cortó en las claves: quedaron 11 de 95 claves y 0 de 22 `CHECK`, con los
+datos completos. En un servidor con InnoDB por defecto sólo se pierden los
+`CHECK`. Sin claves foráneas la base acepta, por ejemplo, un pago de un
+alumno que no existe.
+
+Para saber si una base lo necesita (en phpMyAdmin, con la base abierta):
+
+```sql
+SELECT ENGINE, COUNT(*) FROM information_schema.TABLES
+ WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' GROUP BY ENGINE;
+SELECT COUNT(*) FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE();
+SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS
+ WHERE CONSTRAINT_SCHEMA = DATABASE() AND CONSTRAINT_TYPE = 'CHECK';
+```
+
+Sana: todo InnoDB, 95 claves (94 antes de la 096) y 22 `CHECK`.
 
 `reparar_restauracion_phpmyadmin.sql` lo corrige sobre la base en uso, sin
 tocar datos: pasa a InnoDB lo que debe serlo y crea las claves foráneas y
@@ -134,7 +150,9 @@ una a una en phpMyAdmin, con la base de la escuela abierta, en orden de
 número. Producción, 2026-11-27: faltaban **093** (Insights › Ingresos del
 mes), **094** (bloque y banco de los egresos) y **096** (código interno para
 una sede «PERSONALIZADO»; Sendero no tiene ninguna, sólo añade columnas).
-Orden: 093, 094, 096 y después `reparar_restauracion_phpmyadmin.sql`.
+Orden: 093, 094 y 096. `reparar_restauracion_phpmyadmin.sql` sólo si las
+consultas de arriba muestran algo distinto de una base sana; sobre una base
+sana no hace nada.
 
 ## Archivos fuera de la base
 

@@ -10,7 +10,8 @@
 --   · esas tablas en MyISAM (sin transacciones ni claves foráneas),
 --   · sin la mayoría de las claves foráneas de TODO el sistema,
 --   · sin las restricciones CHECK.
--- Encontrado en la base de producción de Sendero el 2026-11-27: 17 tablas
+-- Encontrado el 2026-11-27 en la copia LOCAL de producción (importada en
+-- WAMP, motor por defecto MyISAM; producción estaba sana): 17 tablas
 -- MyISAM, 11 de 95 claves foráneas y 0 de 22 CHECK.
 --
 -- QUE HACE
