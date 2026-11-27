@@ -111,6 +111,31 @@ Alternativa sin volcado: `aplicar_migracion.sh --generar ARCHIVO.sql` e
 importarlo en phpMyAdmin sobre la copia de v1 restaurada en el hosting. Las
 vistas las crea el usuario que importa, así que no hay `DEFINER` que quitar.
 
+### Si ya se restauró con el Exportar de phpMyAdmin
+
+Es lo que pasó en producción (copia revisada el 2026-11-27): los datos
+llegaron completos, pero quedaron 17 tablas de Arena y League en MyISAM,
+11 de 95 claves foráneas y 0 de 22 `CHECK`. Sin claves foráneas la base
+acepta, por ejemplo, un pago de un alumno que no existe.
+
+`reparar_restauracion_phpmyadmin.sql` lo corrige sobre la base en uso, sin
+tocar datos: pasa a InnoDB lo que debe serlo y crea las claves foráneas y
+los `CHECK` que falten. Se puede repetir. Generado comparando con una base
+migrada desde cero con esta cadena; en la copia de producción dejó motores,
+columnas, índices, claves y `CHECK` idénticos a esa base. Si una clave falla
+por un dato huérfano, se detiene ahí sin perder lo hecho: corregir el dato y
+volver a ejecutar.
+
+### Migraciones posteriores en una base ya migrada
+
+`aplicar_migracion.sh` sólo trabaja sobre v1 sin migrar. Las migraciones
+comunes nuevas (`ds_core/database/0NN_*.sql`, todas repetibles) se ejecutan
+una a una en phpMyAdmin, con la base de la escuela abierta, en orden de
+número. Producción, 2026-11-27: faltaban **093** (Insights › Ingresos del
+mes), **094** (bloque y banco de los egresos) y **096** (código interno para
+una sede «PERSONALIZADO»; Sendero no tiene ninguna, sólo añade columnas).
+Orden: 093, 094, 096 y después `reparar_restauracion_phpmyadmin.sql`.
+
 ## Archivos fuera de la base
 
 Mismas rutas en v1 y en DigiSports, bajo `ds_futbol/`:
