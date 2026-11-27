@@ -161,8 +161,10 @@
 			$registrar_ingreso=$this->guardarDatos("balance_ingreso",$ingreso_datos_reg);
 
 			if($registrar_ingreso->rowCount()>0){
+				/* De vuelta a la lista en el mes del ingreso, para verlo. */
 				$alerta=[
-					"tipo"=>"recargar",
+					"tipo"=>"redireccionar",
+					"url"=>$this->urlListaIngresos($ingreso_fecharecepcion),
 					"titulo"=>"Registro exitoso",
 					"texto"=>"El ingreso se registró correctamente",
 					"icono"=>"success"
@@ -251,6 +253,71 @@
 				}				
 			}
 			return $option;
+		}
+
+		/*
+		| INGRESOS CON CRITERIOS (vista ingresoList, 2026-11-25)
+		|
+		| Igual que los egresos: mes ('' = todos), sede, concepto, forma de
+		| recepción y texto (empresa o descripción). Ver egresosFiltrados().
+		*/
+
+		/** Meses con ingresos activos, del más reciente: ['2026-11' => 2, …]. */
+		public function ingresosMeses(): array{
+			$meses = [];
+			foreach ($this->ejecutarConsulta("SELECT DATE_FORMAT(ingreso_fecharecepcion, '%Y-%m') AS mes, COUNT(*) AS n
+					FROM balance_ingreso WHERE ingreso_estado = 'A'
+					GROUP BY mes ORDER BY mes DESC")->fetchAll() as $f) {
+				$meses[$f['mes']] = (int)$f['n'];
+			}
+			return $meses;
+		}
+
+		/** Sedes para el filtro: las activas y las que tienen ingresos. */
+		public function sedesIngreso(): array{
+			$lista = [];
+			foreach ($this->ejecutarConsulta("SELECT sede_id, sede_nombre FROM general_sede
+					WHERE " . sql_sede_activa('sede_id', 0) . "
+					   OR sede_id IN (SELECT DISTINCT ingreso_sedeid FROM balance_ingreso WHERE ingreso_estado = 'A')
+					ORDER BY sede_nombre")->fetchAll() as $f) {
+				$lista[(int)$f['sede_id']] = $f['sede_nombre'];
+			}
+			return $lista;
+		}
+
+		/** Ingresos activos según los criterios, del más reciente al más antiguo. */
+		public function ingresosFiltrados(array $f): array{
+			$sql = "SELECT I.ingreso_id, I.ingreso_sedeid, S.sede_nombre, I.ingreso_fecharecepcion, I.ingreso_empresa, I.ingreso_monto,
+					       I.ingreso_formaentrega, I.ingreso_concepto, I.ingreso_descripcion, I.ingreso_imagenpago
+					  FROM balance_ingreso I
+					  INNER JOIN general_sede S ON S.sede_id = I.ingreso_sedeid
+					 WHERE I.ingreso_estado = 'A'";
+			$p = [];
+			if (preg_match('/^\d{4}-\d{2}$/', (string)($f['mes'] ?? ''))) {
+				$sql .= " AND I.ingreso_fecharecepcion BETWEEN :ini AND LAST_DAY(:ini2)";
+				$p[':ini'] = $f['mes'] . '-01'; $p[':ini2'] = $f['mes'] . '-01';
+			}
+			if ((int)($f['sede'] ?? 0) > 0) { $sql .= " AND I.ingreso_sedeid = :sede"; $p[':sede'] = (int)$f['sede']; }
+			if ((string)($f['concepto'] ?? '') !== '') { $sql .= " AND I.ingreso_concepto = :concepto"; $p[':concepto'] = (string)$f['concepto']; }
+			if ((string)($f['forma'] ?? '') !== '') { $sql .= " AND I.ingreso_formaentrega = :forma"; $p[':forma'] = (string)$f['forma']; }
+			$q = trim((string)($f['q'] ?? ''));
+			if ($q !== '') {
+				$sql .= " AND (I.ingreso_empresa LIKE :q1 OR I.ingreso_descripcion LIKE :q2)";
+				$p[':q1'] = '%' . $q . '%'; $p[':q2'] = '%' . $q . '%';
+			}
+			$sql .= " ORDER BY I.ingreso_fecharecepcion DESC, I.ingreso_id DESC";
+			return $this->ejecutarConsulta($sql, $p)->fetchAll();
+		}
+
+		/** El mes de un ingreso ('YYYY-MM'): el enlace antiguo /ingresoList/{id}/ lo abre en su mes. */
+		public function mesDeIngreso(int $id): string{
+			$fecha = (string)$this->ejecutarConsulta("SELECT ingreso_fecharecepcion FROM balance_ingreso WHERE ingreso_id = :i AND ingreso_estado = 'A'", [':i' => $id])->fetchColumn();
+			return $fecha !== '' ? substr($fecha, 0, 7) : '';
+		}
+
+		/** A dónde vuelve la lista tras guardar: el mes del ingreso. */
+		private function urlListaIngresos(string $fecha): string{
+			return APP_URL . 'ingresoList/' . (preg_match('/^\d{4}-\d{2}/', $fecha) ? '?mes=' . substr($fecha, 0, 7) : '');
 		}
 
         public function listarIngresos(){
@@ -460,7 +527,7 @@
 				
 				$alerta=[
 					"tipo"=>"redireccionar",
-					"url"=>APP_URL.'ingresoList/',
+					"url"=>$this->urlListaIngresos($ingreso_fecharecepcion),
 					"titulo"=>"Ingreso actualizado",
 					"texto"=>"El ingreso ".$ingreso_empresa." se actualizó correctamente",
 					"icono"=>"success"
@@ -530,14 +597,81 @@
 			return json_encode($alerta);
 		}
 
-		public function BuscarEgreso($egresoid){		
+		public function BuscarEgreso($egresoid){
 			$consulta_datos=("SELECT egreso_sedeid, egreso_fechapago, egreso_empresa, egreso_monto, egreso_formaentrega,
-                                     egreso_concepto, egreso_descripcion, egreso_imagenpago 
+                                     egreso_concepto, egreso_rubroid, egreso_lugarid, egreso_descripcion, egreso_imagenpago
 							 FROM balance_egreso
-							 WHERE egreso_id = :egreso");	
+							 WHERE egreso_id = :egreso");
 
-			$datos = $this->ejecutarConsulta($consulta_datos, [':egreso' => (int)$egresoid]);		
+			$datos = $this->ejecutarConsulta($consulta_datos, [':egreso' => (int)$egresoid]);
 			return $datos;
+		}
+
+		/*
+		| BLOQUE DEL REPORTE (migración 094)
+		|
+		| A qué bloque de Insights › Ingresos del mes pertenece el egreso: el
+		| rubro de los pagos de alumnos que lo origina (la confección de
+		| polines va con «Kit entrenamiento», el pago de los profesores con las
+		| pensiones de su sede). Vacío = «Egresos generales».
+		|
+		| Las pensiones pueden afinarse por lugar de entrenamiento cuando la
+		| sede tiene más de uno (el pago de la cancha de un lugar va con las
+		| pensiones de ese lugar).
+		*/
+		private const RUBROS_BLOQUE = ['RPC', 'RIN', 'RKE', 'RNU', 'ROT', 'RPE'];
+
+		public function listarBloqueEgreso($rubro){
+			$option = '<option value="">Sin asignar (egresos generales)</option>';
+			$nombres = [];
+			foreach ($this->ejecutarConsulta("SELECT C.catalogo_valor, C.catalogo_descripcion
+					FROM general_tabla_catalogo C
+					INNER JOIN general_tabla T ON T.tabla_id = C.catalogo_tablaid
+					WHERE T.tabla_nombre = 'rubros'")->fetchAll() as $f) {
+				$nombres[$f['catalogo_valor']] = $f['catalogo_descripcion'];
+			}
+			foreach (self::RUBROS_BLOQUE as $r) {
+				$texto = $r === 'RPE' ? 'Pensiones' : ($nombres[$r] ?? $r);
+				$option .= '<option value="' . $r . '"' . ((string)$rubro === $r ? ' selected' : '') . '>'
+				         . htmlspecialchars($texto, ENT_QUOTES, 'UTF-8') . '</option>';
+			}
+			return $option;
+		}
+
+		/* Lugares de entrenamiento con su sede: la vista muestra sólo los de
+		   la sede elegida. Los activos y, si el egreso ya tiene uno, ése. */
+		public function listarLugarEgreso($lugarid){
+			$option = '<option value="" data-sede="">Toda la sede</option>';
+			$filas = $this->ejecutarConsulta("SELECT lugar_id, lugar_sedeid, lugar_nombre
+					FROM asistencia_lugar
+					WHERE lugar_estado = 'A' OR lugar_id = :lugar
+					ORDER BY lugar_nombre", [':lugar' => (int)$lugarid])->fetchAll();
+			foreach ($filas as $f) {
+				$option .= '<option value="' . (int)$f['lugar_id'] . '" data-sede="' . (int)$f['lugar_sedeid'] . '"'
+				         . ((int)$lugarid === (int)$f['lugar_id'] ? ' selected' : '') . '>'
+				         . htmlspecialchars($f['lugar_nombre'], ENT_QUOTES, 'UTF-8') . '</option>';
+			}
+			return $option;
+		}
+
+		/**
+		 * Bloque y lugar validados: [rubro|null, lugar|null, error|null].
+		 * El lugar sólo vale con pensiones y si es de la sede del egreso.
+		 */
+		private function bloqueEgresoDePost($sedeid): array{
+			$rubro = strtoupper(trim((string)($_POST['egreso_rubroid'] ?? '')));
+			$lugar = (int)($_POST['egreso_lugarid'] ?? 0);
+			if ($rubro === '') { return [null, null, null]; }
+			if (!in_array($rubro, self::RUBROS_BLOQUE, true)) {
+				return [null, null, 'El bloque del reporte no es válido'];
+			}
+			if ($rubro !== 'RPE' || $lugar <= 0) { return [$rubro, null, null]; }
+			$deLaSede = $this->ejecutarConsulta("SELECT COUNT(*) FROM asistencia_lugar WHERE lugar_id = :l AND lugar_sedeid = :s",
+				[':l' => $lugar, ':s' => (int)$sedeid])->fetchColumn();
+			if ((int)$deLaSede !== 1) {
+				return [null, null, 'El lugar de entrenamiento no pertenece a la sede del egreso'];
+			}
+			return [$rubro, $lugar, null];
 		}
 
 		public function listarTipoEgreso($egreso_concepto){
@@ -564,19 +698,30 @@
 
 		public function listarEgresos(){
 			$tabla="";
-			$consulta_datos="SELECT egreso_id, sede_nombre, egreso_empresa, egreso_monto, egreso_fechapago
-							 FROM balance_egreso, general_sede
-							 WHERE egreso_sedeid = sede_id
-							 	AND egreso_estado = 'A'
-							 ORDER BY egreso_fechapago DESC";	
-					
+			$consulta_datos="SELECT E.egreso_id, S.sede_nombre, E.egreso_empresa, E.egreso_monto, E.egreso_fechapago,
+									E.egreso_rubroid, R.catalogo_descripcion AS rubro, L.lugar_nombre
+							 FROM balance_egreso E
+							 INNER JOIN general_sede S ON S.sede_id = E.egreso_sedeid
+							 LEFT JOIN general_tabla_catalogo R ON R.catalogo_valor = E.egreso_rubroid
+							 LEFT JOIN asistencia_lugar L ON L.lugar_id = E.egreso_lugarid
+							 WHERE E.egreso_estado = 'A'
+							 ORDER BY E.egreso_fechapago DESC";
+
 			$datos = $this->ejecutarConsulta($consulta_datos);
 			$datos = $datos->fetchAll();
 			foreach($datos as $rows){
+				/* El bloque del reporte, o el aviso de que falta. */
+				if ($rows['egreso_rubroid'] === null || $rows['egreso_rubroid'] === '') {
+					$bloque = '<span class="badge text-bg-warning" title="Sale en «Egresos generales» del reporte Ingresos del mes">Sin bloque</span>';
+				} else {
+					$bloque = htmlspecialchars($rows['egreso_rubroid'] === 'RPE' ? 'Pensiones' : (string)$rows['rubro'], ENT_QUOTES, 'UTF-8')
+					        . ($rows['lugar_nombre'] ? '<br><small class="text-body-secondary">' . htmlspecialchars($rows['lugar_nombre'], ENT_QUOTES, 'UTF-8') . '</small>' : '');
+				}
 				$tabla.='
 					<tr>
-						<td>'.$rows['sede_nombre'].'</td>						
+						<td>'.$rows['sede_nombre'].'</td>
 						<td>'.$rows['egreso_empresa'].'</td>
+						<td>'.$bloque.'</td>
 						<td>'.$rows['egreso_monto'].'</td>
 						<td>'.$rows['egreso_fechapago'].'</td>
 						<td>
@@ -593,8 +738,107 @@
 			return $tabla;
 		}
 
-		public function registrarEgreso(){							
-			
+		/*
+		| EGRESOS POR MES (vista egresoList, 2026-11-25)
+		|
+		| La lista se ve por mes, con «Criterios de búsqueda»: mes, sede,
+		| bloque del reporte, concepto y texto (empresa o detalle). Los
+		| catálogos se unen por su tabla: un mismo código podría existir en
+		| otra (el JOIN de listarEgresos sólo miraba el valor).
+		*/
+
+		/** Meses con egresos activos, del más reciente: ['2026-11' => 5, …]. */
+		public function egresosMeses(): array{
+			$meses = [];
+			foreach ($this->ejecutarConsulta("SELECT DATE_FORMAT(egreso_fechapago, '%Y-%m') AS mes, COUNT(*) AS n
+					FROM balance_egreso WHERE egreso_estado = 'A'
+					GROUP BY mes ORDER BY mes DESC")->fetchAll() as $f) {
+				$meses[$f['mes']] = (int)$f['n'];
+			}
+			return $meses;
+		}
+
+		/** Valor => descripción de un catálogo (general_tabla_catalogo). */
+		public function catalogoEgreso(string $tabla): array{
+			$lista = [];
+			foreach ($this->ejecutarConsulta("SELECT C.catalogo_valor, C.catalogo_descripcion
+					FROM general_tabla_catalogo C
+					INNER JOIN general_tabla T ON T.tabla_id = C.catalogo_tablaid
+					WHERE T.tabla_nombre = :t ORDER BY C.catalogo_descripcion", [':t' => $tabla])->fetchAll() as $f) {
+				$lista[$f['catalogo_valor']] = $f['catalogo_descripcion'];
+			}
+			return $lista;
+		}
+
+		/** Bloques del reporte, en su orden: ['RPC' => 'Campeonatos', …, 'RPE' => 'Pensiones']. */
+		public function bloquesEgreso(): array{
+			$nombres = $this->catalogoEgreso('rubros');
+			$lista = [];
+			foreach (self::RUBROS_BLOQUE as $r) { $lista[$r] = $r === 'RPE' ? 'Pensiones' : ($nombres[$r] ?? $r); }
+			return $lista;
+		}
+
+		/** Sedes para el filtro: las activas y las que tienen egresos. */
+		public function sedesEgreso(): array{
+			$lista = [];
+			foreach ($this->ejecutarConsulta("SELECT sede_id, sede_nombre FROM general_sede
+					WHERE " . sql_sede_activa('sede_id', 0) . "
+					   OR sede_id IN (SELECT DISTINCT egreso_sedeid FROM balance_egreso WHERE egreso_estado = 'A')
+					ORDER BY sede_nombre")->fetchAll() as $f) {
+				$lista[(int)$f['sede_id']] = $f['sede_nombre'];
+			}
+			return $lista;
+		}
+
+		/**
+		 * Egresos activos según los criterios:
+		 *   mes 'YYYY-MM' ('' = todos), sede (0 = todas), bloque ('' todos,
+		 *   'SIN' sin bloque, o un rubro), concepto ('' todos), q (texto).
+		 * Del más reciente al más antiguo.
+		 */
+		public function egresosFiltrados(array $f): array{
+			$sql = "SELECT E.egreso_id, E.egreso_sedeid, S.sede_nombre, E.egreso_fechapago, E.egreso_empresa, E.egreso_monto,
+					       E.egreso_formaentrega, E.egreso_concepto, E.egreso_rubroid, E.egreso_lugarid, L.lugar_nombre,
+					       E.egreso_descripcion, E.egreso_imagenpago
+					  FROM balance_egreso E
+					  INNER JOIN general_sede S ON S.sede_id = E.egreso_sedeid
+					  LEFT JOIN asistencia_lugar L ON L.lugar_id = E.egreso_lugarid
+					 WHERE E.egreso_estado = 'A'";
+			$p = [];
+			if (preg_match('/^\d{4}-\d{2}$/', (string)($f['mes'] ?? ''))) {
+				$sql .= " AND E.egreso_fechapago BETWEEN :ini AND LAST_DAY(:ini2)";
+				$p[':ini'] = $f['mes'] . '-01'; $p[':ini2'] = $f['mes'] . '-01';
+			}
+			if ((int)($f['sede'] ?? 0) > 0) { $sql .= " AND E.egreso_sedeid = :sede"; $p[':sede'] = (int)$f['sede']; }
+			$bloque = (string)($f['bloque'] ?? '');
+			if ($bloque === 'SIN') {
+				$sql .= " AND (E.egreso_rubroid IS NULL OR E.egreso_rubroid = '')";
+			} elseif (in_array($bloque, self::RUBROS_BLOQUE, true)) {
+				$sql .= " AND E.egreso_rubroid = :bloque"; $p[':bloque'] = $bloque;
+			}
+			if ((string)($f['concepto'] ?? '') !== '') { $sql .= " AND E.egreso_concepto = :concepto"; $p[':concepto'] = (string)$f['concepto']; }
+			$q = trim((string)($f['q'] ?? ''));
+			if ($q !== '') {
+				$sql .= " AND (E.egreso_empresa LIKE :q1 OR E.egreso_descripcion LIKE :q2)";
+				$p[':q1'] = '%' . $q . '%'; $p[':q2'] = '%' . $q . '%';
+			}
+			$sql .= " ORDER BY E.egreso_fechapago DESC, E.egreso_id DESC";
+			return $this->ejecutarConsulta($sql, $p)->fetchAll();
+		}
+
+		/** El mes de un egreso ('YYYY-MM'), para volver a él tras guardarlo. */
+		public function mesDeEgreso(int $id): string{
+			$fecha = (string)$this->ejecutarConsulta("SELECT egreso_fechapago FROM balance_egreso WHERE egreso_id = :e", [':e' => $id])->fetchColumn();
+			return $fecha !== '' ? substr($fecha, 0, 7) : '';
+		}
+
+		/** A dónde vuelve la lista tras guardar: el mes del egreso. */
+		private function urlListaEgresos(string $fecha): string{
+			return APP_URL . 'egresoList/' . (preg_match('/^\d{4}-\d{2}/', $fecha) ? '?mes=' . substr($fecha, 0, 7) : '');
+		}
+
+		public function registrarEgreso(){
+
 			# Almacenando datos#
 			$egreso_sedeid			= $this->limpiarCadena($_POST['egreso_sedeid']);
 			$egreso_fechapago 		= $this->limpiarCadena($_POST['egreso_fechapago']);
@@ -616,8 +860,14 @@
 					"texto"=>"No ha completado todos los campos obligatorios",
 					"icono"=>"error"
 				];
-				return json_encode($alerta);       
-		    }		
+				return json_encode($alerta);
+		    }
+
+			# Bloque del reporte (migración 094) #
+			[$egreso_rubroid, $egreso_lugarid, $errorBloque] = $this->bloqueEgresoDePost($egreso_sedeid);
+			if ($errorBloque !== null) {
+				return json_encode(["tipo"=>"simple", "titulo"=>"Error", "texto"=>$errorBloque, "icono"=>"error"]);
+			}
 
             # Directorio de imagenes #
 			$img_dir="../views/imagenes/fotos/egresos/";
@@ -727,6 +977,16 @@
 					"campo_valor"=>$egreso_concepto
 				],				
 				[
+					"campo_nombre"=>"egreso_rubroid",
+					"campo_marcador"=>":Rubroid",
+					"campo_valor"=>$egreso_rubroid
+				],
+				[
+					"campo_nombre"=>"egreso_lugarid",
+					"campo_marcador"=>":Lugarid",
+					"campo_valor"=>$egreso_lugarid
+				],
+				[
 					"campo_nombre"=>"egreso_descripcion",
 					"campo_marcador"=>":Descripcion",
 					"campo_valor"=>$egreso_descripcion
@@ -751,12 +1011,14 @@
 			$registrar_egreso=$this->guardarDatos("balance_egreso",$egreso_datos_reg);
 
 			if($registrar_egreso->rowCount()>0){
+				/* De vuelta a la lista en el mes del egreso, para verlo. */
 				$alerta=[
-					"tipo"=>"recargar",
+					"tipo"=>"redireccionar",
+					"url"=>$this->urlListaEgresos($egreso_fechapago),
 					"titulo"=>"Registro exitoso",
 					"texto"=>"El egreso se registró correctamente",
 					"icono"=>"success"
-				];				
+				];			
 			
 			}else{				
 
@@ -806,8 +1068,14 @@
 					"texto"=>"No ha completado todos los campos obligatorios",
 					"icono"=>"error"
 				];
-				return json_encode($alerta);       
-		    }		
+				return json_encode($alerta);
+		    }
+
+			# Bloque del reporte (migración 094) #
+			[$egreso_rubroid, $egreso_lugarid, $errorBloque] = $this->bloqueEgresoDePost($egreso_sedeid);
+			if ($errorBloque !== null) {
+				return json_encode(["tipo"=>"simple", "titulo"=>"Error", "texto"=>$errorBloque, "icono"=>"error"]);
+			}
 
 			$egreso_datos_reg=[
 				[
@@ -839,13 +1107,23 @@
 					"campo_nombre"=>"egreso_concepto",
 					"campo_marcador"=>":Concepto",
 					"campo_valor"=>$egreso_concepto
-				],				
+				],
+				[
+					"campo_nombre"=>"egreso_rubroid",
+					"campo_marcador"=>":Rubroid",
+					"campo_valor"=>$egreso_rubroid
+				],
+				[
+					"campo_nombre"=>"egreso_lugarid",
+					"campo_marcador"=>":Lugarid",
+					"campo_valor"=>$egreso_lugarid
+				],
 				[
 					"campo_nombre"=>"egreso_descripcion",
 					"campo_marcador"=>":Descripcion",
 					"campo_valor"=>$egreso_descripcion
 				]
-			];		
+			];
 
 			# Directorio de imagenes #
 			$img_dir="../views/imagenes/fotos/egresos/";
@@ -946,7 +1224,7 @@
 				
 				$alerta=[
 					"tipo"=>"redireccionar",
-					"url"=>APP_URL.'egresoList/',
+					"url"=>$this->urlListaEgresos($egreso_fechapago),
 					"titulo"=>"Egreso actualizado",
 					"texto"=>"El egreso ".$egreso_empresa." se actualizó correctamente",
 					"icono"=>"success"
